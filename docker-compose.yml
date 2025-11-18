@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (shared by all services)
+  postgres:
+    image: postgres:16-alpine
+    container_name: ivd_postgres
+    environment:
+      POSTGRES_USER: ivd_user
+      POSTGRES_PASSWORD: ivd_password
+      POSTGRES_DB: ivd_middleware
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ivd_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (for Celery/background tasks)
+  redis:
+    image: redis:7-alpine
+    container_name: ivd_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ (for Celery message queue)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ivd_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ivd_user
+      RABBITMQ_DEFAULT_PASS: ivd_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Platform Service
+  platform:
+    build:
+      context: ./services/platform
+      dockerfile: Dockerfile
+    container_name: ivd_platform_service
+    environment:
+      DATABASE_URL: postgresql://ivd_user:ivd_password@postgres:5432/ivd_middleware
+      USE_REAL_DATABASE: "true"
+      ENVIRONMENT: docker
+      SECRET_KEY: "docker-secret-key-change-in-production"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/platform/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # LIS Integration Service
+  lis_integration:
+    build:
+      context: ./services/lis_integration
+      dockerfile: Dockerfile
+    container_name: ivd_lis_service
+    environment:
+      DATABASE_URL: postgresql://ivd_user:ivd_password@postgres:5432/ivd_middleware
+      USE_REAL_DATABASE: "true"
+      ENVIRONMENT: docker
+      CELERY_BROKER_URL: amqp://ivd_user:ivd_password@rabbitmq:5672/
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/lis_integration/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+
+  # Celery Worker for LIS Integration (Pull Model)
+  lis_worker:
+    build:
+      context: ./services/lis_integration
+      dockerfile: Dockerfile
+    container_name: ivd_lis_worker
+    environment:
+      DATABASE_URL: postgresql://ivd_user:ivd_password@postgres:5432/ivd_middleware
+      USE_REAL_DATABASE: "true"
+      ENVIRONMENT: docker
+      CELERY_BROKER_URL: amqp://ivd_user:ivd_password@rabbitmq:5672/
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/lis_integration/app:/app/app
+    command: celery -A app.tasks.worker worker --loglevel=info
+
+  # Verification & Review Service
+  verification:
+    build:
+      context: ./services/verification
+      dockerfile: Dockerfile
+    container_name: ivd_verification_service
+    environment:
+      DATABASE_URL: postgresql://ivd_user:ivd_password@postgres:5432/ivd_middleware
+      USE_REAL_DATABASE: "true"
+      ENVIRONMENT: docker
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/verification/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+
+  # API Gateway
+  api_gateway:
+    build:
+      context: ./services/api_gateway
+      dockerfile: Dockerfile
+    container_name: ivd_api_gateway
+    environment:
+      PLATFORM_SERVICE_URL: http://platform:8000
+      LIS_SERVICE_URL: http://lis_integration:8001
+      VERIFICATION_SERVICE_URL: http://verification:8002
+    ports:
+      - "8080:8080"
+    depends_on:
+      - platform
+      - lis_integration
+      - verification
+    volumes:
+      - ./services/api_gateway/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: ivd_network
