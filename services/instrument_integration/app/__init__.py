@@ -1,0 +1,1 @@
+"""Instrument Integration Service application."""
