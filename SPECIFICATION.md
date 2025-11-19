@@ -4,7 +4,8 @@ This document defines **what** the IVD Middleware should do from a functional an
 
 **Note:** This is the master specification containing system-wide vision, cross-cutting concerns, and global non-functional requirements. For service-specific implementation details, see:
 - **[SPECIFICATION-PLATFORM.md](SPECIFICATION-PLATFORM.md)** - Platform Service (Features 1-2)
-- **[SPECIFICATION-LIS-INTEGRATION.md](SPECIFICATION-LIS-INTEGRATION.md)** - LIS Integration Service (Features 3-4)
+- **[SPECIFICATION-LIS-INTEGRATION.md](SPECIFICATION-LIS-INTEGRATION.md)** - LIS Integration Service (Features 3-4, 8)
+- **[SPECIFICATION-INSTRUMENT-INTEGRATION.md](SPECIFICATION-INSTRUMENT-INTEGRATION.md)** - Instrument Integration Service (Features 9-10)
 - **[SPECIFICATION-VERIFICATION.md](SPECIFICATION-VERIFICATION.md)** - Verification & Review Service (Features 5-7)
 
 ---
@@ -27,17 +28,19 @@ Laboratory result verification is time-consuming and error-prone when done manua
 **In Scope:**
 - Multi-tenant architecture with complete data isolation
 - User authentication and role-based access
-- LIS integration (mock data, file upload, REST API)
+- LIS integration (receive orders, send verified results) - bidirectional communication
+- Analytical instrument integration (receive queries and results via REST API)
 - Automated result verification with configurable rules
 - Manual review workflow for flagged results
 - Sample and result querying
+- Complete end-to-end workflow: Instrument → Middleware → LIS
 
 **Out of Scope (Future Phases):**
 - Advanced analytics and dashboards
 - Mobile applications
 - HL7 message handling
 - EHR system integration
-- Direct instrument connections
+- Direct instrument connections (TCP/IP raw sockets, proprietary protocols)
 
 ---
 
@@ -123,11 +126,36 @@ See [SPECIFICATION-LIS-INTEGRATION.md](SPECIFICATION-LIS-INTEGRATION.md) for com
 - Data normalization and duplicate detection
 - Support searching and filtering of samples
 
-**Feature 4: LIS Integration**
+**Feature 4: LIS Integration (Receive Orders)**
 - Connect to external Laboratory Information Systems
 - Support both push (LIS sends data) and pull (middleware retrieves) models
 - Multiple LIS adapters (mock, file upload, REST API)
 - Connection health monitoring and error handling
+
+**Feature 8: Send Results to LIS (Bidirectional Communication)**
+- Upload verified and reviewed results back to external LIS systems
+- Support batch and real-time upload modes
+- Track upload status and sync state for each result
+- Retry mechanism for failed uploads with exponential backoff
+- Per-tenant configuration of auto-upload vs manual upload
+
+---
+
+#### Instrument Integration Service Features
+See [SPECIFICATION-INSTRUMENT-INTEGRATION.md](SPECIFICATION-INSTRUMENT-INTEGRATION.md) for complete details.
+
+**Feature 9: Instrument Query Reception (Host Queries)**
+- Receive host query requests from analytical instruments via HTTP REST API
+- Return pending test orders for requested patient/sample to instrument
+- Query authentication using instrument API tokens
+- Instrument connection health monitoring
+
+**Feature 10: Instrument Result Reception**
+- Receive test results from analytical instruments via HTTP REST API
+- Store instrument results with complete validation
+- Automatic duplicate detection and prevention
+- Trigger verification workflow immediately upon receipt
+- Support multiple instrument connections per tenant
 
 ---
 
@@ -647,9 +675,17 @@ Features are prioritized across all services. See service-specific specification
 
 **LIS Integration Service** ([SPECIFICATION-LIS-INTEGRATION.md](SPECIFICATION-LIS-INTEGRATION.md)):
 - Basic LIS integration (mock adapter for testing)
-- LIS API endpoint to receive incoming orders (push model)
+- LIS API endpoint to receive incoming orders from LIS (Feature 4)
+- LIS API endpoint to send verified results back to LIS (Feature 8)
 - Sample and result ingestion
 - Sample/result querying (search, filter, view)
+- Bidirectional LIS communication (receive orders, send results)
+
+**Instrument Integration Service** ([SPECIFICATION-INSTRUMENT-INTEGRATION.md](SPECIFICATION-INSTRUMENT-INTEGRATION.md)):
+- Receive host queries from instruments (Feature 9)
+- Receive test results from instruments (Feature 10)
+- Return pending orders to instruments
+- Store and validate instrument results
 
 **Verification Service** ([SPECIFICATION-VERIFICATION.md](SPECIFICATION-VERIFICATION.md)):
 - Auto-verification settings configuration (reference ranges, critical ranges, instrument flags per test)

@@ -134,6 +134,25 @@ services:
       - ./services/verification/app:/app/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 
+  # Instrument Integration Service
+  instrument_integration:
+    build:
+      context: ./services/instrument_integration
+      dockerfile: Dockerfile
+    container_name: ivd_instrument_service
+    environment:
+      DATABASE_URL: postgresql://ivd_user:ivd_password@postgres:5432/ivd_middleware
+      USE_REAL_DATABASE: "true"
+      ENVIRONMENT: docker
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/instrument_integration/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+
   # API Gateway
   api_gateway:
     build:
@@ -143,12 +162,14 @@ services:
     environment:
       PLATFORM_SERVICE_URL: http://platform:8000
       LIS_SERVICE_URL: http://lis_integration:8001
+      INSTRUMENT_SERVICE_URL: http://instrument_integration:8003
       VERIFICATION_SERVICE_URL: http://verification:8002
     ports:
       - "8080:8080"
     depends_on:
       - platform
       - lis_integration
+      - instrument_integration
       - verification
     volumes:
       - ./services/api_gateway/app:/app/app

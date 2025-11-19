@@ -6,7 +6,9 @@ This document proposes the decomposition of the IVD Middleware application into 
 
 ## Architecture Overview
 
-The system is decomposed into **3 core backend services** organized by domain boundaries, **2 web applications** for different user types, and an optional API Gateway for routing and authentication.
+The system is decomposed into **4 core backend services** organized by domain boundaries, **2 web applications** for different user types, and an API Gateway for routing and authentication.
+
+The 4 services implement a complete end-to-end workflow: **Instruments → Middleware → Verification → LIS**
 
 ---
 
@@ -118,6 +120,42 @@ The system is decomposed into **3 core backend services** organized by domain bo
 
 ---
 
+### 4. Instrument Integration Service (Analytical Instruments)
+
+**Responsibility:** Connect to analytical laboratory instruments, receive host queries and test results via HTTP REST APIs
+
+**Key Features:**
+- Instrument registration and management per tenant
+- Host query reception (instruments request pending orders)
+- Test result reception from instruments
+- Automatic duplicate detection and prevention
+- Trigger verification workflow on new results
+- Instrument connection health monitoring
+- Query history and audit trail
+
+**Ports/Adapters:**
+- `IInstrumentAdapter` → RESTAPIInstrumentAdapter, MockInstrumentAdapter
+- `IInstrumentRepository` → PostgreSQL adapter, In-memory adapter
+- `IOrderRepository` → PostgreSQL adapter, In-memory adapter (shared with LIS Service)
+- `IOrderQueryRepository` → PostgreSQL adapter, In-memory adapter (audit log)
+
+**API Endpoints:**
+- `POST /api/v1/instruments/register` - Register new instrument
+- `GET /api/v1/instruments` - List instruments for tenant
+- `GET /api/v1/instruments/{id}/status` - Check instrument connection status
+- `POST /api/v1/instruments/query-host` - **Instrument queries for pending orders** (authenticated with API token)
+- `POST /api/v1/instruments/results` - **Instrument sends test results** (authenticated with API token)
+- `GET /api/v1/instruments/{id}/query-history` - Audit log of queries
+
+**Why separate?**
+- Different protocol and communication patterns than LIS (real-time bidirectional vs batch)
+- Instrument-specific authentication (per-instrument API tokens)
+- Can scale horizontally for many concurrent instruments
+- Different data models (orders, query logs)
+- Independent of LIS integration implementation
+
+---
+
 ## Service Communication Pattern
 
 Since services need to share data (especially samples/results), two approaches are considered:
@@ -213,7 +251,8 @@ Since services need to share data (especially samples/results), two approaches a
 **Endpoints:**
 ```
 /api/v1/platform/*     → Platform Service
-/api/v1/lis/*          → Laboratory Integration Service
+/api/v1/lis/*          → LIS Integration Service
+/api/v1/instruments/*  → Instrument Integration Service (NEW)
 /api/v1/verification/* → Verification & Review Service
 /api/v1/samples/*      → Query both Integration + Verification Services
 ```
@@ -223,38 +262,45 @@ Since services need to share data (especially samples/results), two approaches a
 ## Deployment Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Load Balancer                        │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Load Balancer / API Gateway                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                │                       │                      │
+    ┌───────────▼──────────┐  ┌────────▼─────────┐  ┌────────▼─────────┐
+    │ Laboratory Portal    │  │  Admin Portal    │  │  Instruments     │
+    │ (SPA)                │  │  (SPA)           │  │  (REST APIs)     │
+    └──────────────────────┘  └──────────────────┘  └──────────────────┘
+                │                       │                      │
+                └───────────────────────┼──────────────────────┘
+                                        │
+      ┌─────────────────┬──────────────┼──────────────┬─────────────────┐
+      │                 │              │              │                 │
+┌─────▼──────┐  ┌──────▼──────┐  ┌───▼──────┐  ┌───▼──────────┐  ┌────▼──────────┐
+│ Platform   │  │ LIS Integ.  │  │Instrument│  │Verification │  │ API Gateway   │
+│ Service    │  │ Service     │  │Service   │  │ Service     │  │ (Lightweight) │
+│ (8000)     │  │ (8001)      │  │ (8003)   │  │ (8002)      │  │ (8080)        │
+└─────┬──────┘  └──────┬──────┘  └───┬──────┘  └───┬──────────┘  └──────────────┘
+      │                │              │            │
+      └────────────────┼──────────────┼────────────┘
+                       │              │
+                ┌──────▼──────────────▼─────┐
+                │   PostgreSQL Database     │
+                │   (Shared Multi-Tenant)   │
+                │                           │
+                │ Tables:                   │
+                │ - tenants, users          │
+                │ - samples, results        │
+                │ - orders                  │
+                │ - instruments             │
+                │ - reviews                 │
+                │ - lis_configurations      │
+                └──────────────────────────┘
                            │
-        ┌──────────────────┼──────────────────┐
-        │                  │                  │
-┌───────▼────────┐ ┌──────▼───────┐ ┌────────▼────────┐
-│ Laboratory     │ │ Admin Portal │ │   API Gateway   │
-│ Portal (SPA)   │ │    (SPA)     │ │   (Lightweight) │
-└────────────────┘ └──────────────┘ └─────────┬───────┘
-                                              │
-                    ┌─────────────────────────┼─────────────────────┐
-                    │                         │                     │
-           ┌────────▼─────────┐    ┌─────────▼────────┐  ┌────────▼──────────┐
-           │ Platform Service │    │ LIS Integration  │  │ Verification &    │
-           │ (FastAPI)        │    │ Service (FastAPI)│  │ Review Service    │
-           │                  │    │                  │  │ (FastAPI)         │
-           └────────┬─────────┘    └─────────┬────────┘  └─────────┬─────────┘
-                    │                        │                     │
-                    │                        │                     │
-                    └────────────────────────┼─────────────────────┘
-                                             │
-                                  ┌──────────▼──────────┐
-                                  │  PostgreSQL         │
-                                  │  (Shared Database)  │
-                                  │  Multi-tenant       │
-                                  └─────────────────────┘
-                                             │
-                                  ┌──────────▼──────────┐
-                                  │  RabbitMQ/Celery    │
-                                  │  (Background tasks) │
-                                  └─────────────────────┘
+                ┌──────────▼──────────┐
+                │  RabbitMQ/Celery    │
+                │  (Background tasks) │
+                │  Redis (cache)      │
+                └─────────────────────┘
 ```
 
 ---
@@ -328,7 +374,29 @@ ivd_middleware/
 │   │   ├── Dockerfile
 │   │   └── requirements.txt
 │   │
-│   └── api_gateway/           # API Gateway (Optional for MVP)
+│   ├── instrument_integration/ # Instrument Integration Service (NEW)
+│   │   ├── app/
+│   │   │   ├── models/
+│   │   │   ├── ports/
+│   │   │   ├── adapters/
+│   │   │   │   ├── instrument_adapters/  # REST, Mock adapters
+│   │   │   │   ├── postgres_*.py
+│   │   │   │   └── in_memory_*.py
+│   │   │   ├── services/
+│   │   │   ├── api/
+│   │   │   ├── exceptions/
+│   │   │   ├── config.py
+│   │   │   ├── dependencies.py
+│   │   │   └── main.py
+│   │   ├── tests/
+│   │   │   ├── conftest.py
+│   │   │   ├── unit/
+│   │   │   ├── integration/
+│   │   │   └── shared/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   └── api_gateway/           # API Gateway (Lightweight request router)
 │       ├── app/
 │       │   └── main.py
 │       ├── Dockerfile
@@ -376,9 +444,15 @@ ivd_middleware/
 
 ### LIS Integration Service owns:
 - `lis_configurations` table
-- `samples` table (created here)
-- `results` table (created here)
-- `lis_sync_status` table
+- `samples` table
+- `results` table (shared with Instrument Service and Verification Service)
+- `orders` table (shared with Instrument Integration Service)
+
+### Instrument Integration Service owns:
+- `instruments` table
+- `instrument_queries` table (audit log)
+- Reads from `orders` table (written by LIS Service)
+- Writes to `results` table (read by Verification Service and LIS Service)
 
 ### Verification Service owns:
 - `auto_verification_settings` table

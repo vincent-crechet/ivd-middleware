@@ -6,15 +6,17 @@
 
 ## Service Responsibility
 
-The LIS Integration Service connects external Laboratory Information Systems (LIS) to the IVD Middleware and manages sample and result data. It handles:
+The LIS Integration Service connects external Laboratory Information Systems (LIS) to the IVD Middleware and manages bidirectional communication of sample, result, and order data. It handles:
 
 - **LIS Connection Management**: Configure and maintain connections to external LIS systems
-- **Data Ingestion**: Retrieve samples and results from LIS (push and pull models)
+- **Data Ingestion (Receive)**: Retrieve samples and results from LIS (push and pull models)
+- **Data Export (Send)**: Upload verified and reviewed results back to LIS
 - **Data Normalization**: Transform LIS data into standardized format
 - **Duplicate Detection**: Prevent re-importing existing samples/results
 - **Sample & Result Querying**: Provide search and filtering capabilities
+- **Order Management**: Manage test orders from LIS that instruments will execute
 
-**Service Boundary:** All LIS adapter logic, sample/result storage, and query operations are owned by this service.
+**Service Boundary:** All LIS adapter logic (bidirectional), sample/result/order storage, and query operations are owned by this service.
 
 ---
 
@@ -115,6 +117,50 @@ Connects to external Laboratory Information Systems to retrieve sample and resul
 
 ---
 
+### Feature 8: Send Results to LIS (Bidirectional Communication)
+
+**What It Does:**
+Uploads verified and reviewed results back to the external LIS system, enabling bidirectional data flow between middleware and LIS.
+
+**User Stories:**
+
+1. **As a laboratory administrator**, I want verified results to be automatically sent back to the LIS so that the LIS stays synchronized with verification decisions.
+
+2. **As a laboratory administrator**, I want to configure whether results are automatically uploaded or require manual approval so that we maintain control over what goes back to the LIS.
+
+3. **As a laboratory administrator**, I want to see which results have been successfully sent to the LIS and which failed so that I can monitor data flow.
+
+**Requirements:**
+- Support uploading verified results back to external LIS
+- Support two upload modes:
+  - **Automatic**: Results automatically uploaded when verification is complete
+  - **Manual**: Results uploaded only when explicitly approved by admin
+- Track upload status for each result (pending, sent, failed, acknowledged)
+- Retry mechanism for failed uploads with exponential backoff
+- Validate that all results match verification status in LIS
+- Log all upload attempts and failures
+
+**Acceptance Criteria:**
+- [ ] Lab admin can configure auto-upload vs manual upload per tenant
+- [ ] Lab admin can choose which verification statuses to upload (verified, rejected, both)
+- [ ] System automatically uploads results when auto-upload is enabled
+- [ ] Lab admin can manually trigger upload of pending results
+- [ ] Each result tracks: upload status, last upload attempt timestamp, failure reason
+- [ ] Failed uploads retry automatically (exponential backoff: 1 min, 2 min, 4 min, 8 min)
+- [ ] Lab admin is notified after 3 consecutive failures for a result
+- [ ] LIS connection health is verified before attempting upload
+- [ ] Bulk upload operations are supported (upload multiple results at once)
+
+**Business Rules:**
+- Only verified or rejected results can be uploaded (status = "verified" or "rejected")
+- Results can only be uploaded once successfully (idempotent)
+- Failed uploads do not block other operations
+- Auto-upload requires at least one successful ping to LIS in the last hour
+- Uploads respect rate limits defined in LIS configuration
+- Once uploaded, original result data in middleware cannot be modified
+
+---
+
 ### Feature 7 (Partial): Sample & Result Querying
 
 **What It Does:**
@@ -182,7 +228,7 @@ A physical specimen submitted to the laboratory for testing. Contains patient id
 ### Result
 The analytical outcome of a test performed on a sample. Includes measured value, reference range, and verification status.
 
-**Key Attributes:**
+**Key Attributes (Verification):**
 - Unique identifier (UUID)
 - Sample ID (foreign key, NOT NULL)
 - Tenant ID (foreign key, NOT NULL, denormalized for query performance)
@@ -197,6 +243,13 @@ The analytical outcome of a test performed on a sample. Includes measured value,
 - Verification method (auto, manual, null)
 - Timestamps (created_at, verified_at)
 
+**Key Attributes (Upload to LIS - NEW):**
+- Upload status (pending, sent, failed, acknowledged)
+- Sent to LIS at (timestamp, nullable)
+- Last upload attempt at (timestamp, nullable)
+- Upload failure count (integer, default 0)
+- Upload failure reason (text, nullable)
+
 **Key Relationships:**
 - Each result belongs to exactly one sample
 - Each result belongs to exactly one tenant
@@ -209,9 +262,9 @@ The analytical outcome of a test performed on a sample. Includes measured value,
 ---
 
 ### LIS Configuration (Per Tenant)
-Configuration for connecting to a laboratory's LIS system.
+Configuration for connecting to a laboratory's LIS system, including bidirectional communication settings.
 
-**Key Attributes:**
+**Key Attributes (Receive Side):**
 - Tenant ID (foreign key, unique)
 - LIS type (mock, file_upload, rest_api_push, rest_api_pull)
 - Integration model (push, pull)
@@ -222,6 +275,16 @@ Configuration for connecting to a laboratory's LIS system.
 - Last successful retrieval timestamp
 - Connection status (active, inactive, failed)
 - Failure count
+
+**Key Attributes (Send Side):**
+- Auto-upload enabled (boolean, default: false)
+- Upload verified results (boolean)
+- Upload rejected results (boolean)
+- Upload batch size (number of results per batch)
+- Upload rate limit (max results per minute)
+- Last successful upload timestamp
+- Last upload failure timestamp
+- Upload failure count
 - Timestamps (created_at, updated_at)
 
 ---
@@ -232,10 +295,15 @@ The service implements the **Adapter Pattern** for LIS connections:
 
 ### ILISAdapter Interface
 ```
+# Receive side (inbound)
 - connect(): bool
 - get_samples(since: datetime): List[Sample]
 - get_results(sample_id): List[Result]
 - test_connection(): ConnectionStatus
+
+# Send side (outbound - new for bidirectional)
+- send_results(results: List[Result]) -> SendStatus
+- acknowledge_results(result_ids: List[str]) -> bool
 ```
 
 ### Adapter Implementations
@@ -289,6 +357,20 @@ Based on [PROPOSED-ARCHITECTURE.md](PROPOSED-ARCHITECTURE.md), the LIS Integrati
 - `GET /api/v1/samples/{id}` - Get sample details
 - `GET /api/v1/samples/{id}/results` - Get all results for a sample
 - `GET /api/v1/results/{id}` - Get result details
+
+### Data Export (Send Results to LIS)
+- `POST /api/v1/lis/send-results` - Upload verified/reviewed results to LIS (admin only)
+  - Request body: list of result IDs to send, optional filters
+  - Returns: batch_id, count_sent, count_failed, retry_schedule
+- `GET /api/v1/lis/send-status` - Get upload status and sync state (admin only)
+  - Query params: `start_date`, `end_date`, `status` (pending, sent, failed, acknowledged)
+  - Returns: list of results with upload status
+- `POST /api/v1/lis/retry-failed` - Retry uploading failed results (admin only)
+  - Request body: optional filters (result_ids, start_date, end_date)
+  - Returns: retry_job_id, count_scheduled_for_retry
+- `PUT /api/v1/lis/config/upload-settings` - Update auto-upload configuration (admin only)
+  - Request body: auto_upload_enabled, upload_verified, upload_rejected, batch_size, rate_limit
+  - Returns: updated LIS configuration
 
 ---
 
@@ -372,17 +454,28 @@ Based on [PROPOSED-ARCHITECTURE.md](PROPOSED-ARCHITECTURE.md), the LIS Integrati
 - **Platform Service**:
   - User authentication (JWT validation)
   - Tenant existence validation
+- **Instrument Integration Service** (NEW):
+  - Orders (pending test orders that instruments will execute)
+  - Result data normalization patterns (for consistency)
 
 ### Provides To:
 - **Verification Service**:
   - Sample and result data for auto-verification
   - Result updates (verification_status, verification_method)
   - Patient history for delta checks
+- **Instrument Integration Service** (NEW):
+  - Test orders from LIS (pending work for instruments to execute)
+  - Confirmed samples (which samples need test results from instruments)
 
-**Communication:**
-- Verification Service reads samples/results via shared database (PostgreSQL)
-- Verification Service updates `verification_status` on results
-- Event-driven: LIS service publishes "NewResultIngested" event → Verification service consumes
+**Communication Patterns:**
+- **With Verification Service:**
+  - Reads samples/results via shared database (PostgreSQL)
+  - Verification Service updates `verification_status` on results
+  - Event-driven (Phase 2): LIS service publishes "NewResultIngested" event → Verification service consumes
+- **With Instrument Integration Service:**
+  - Shares `orders` table (LIS owns/writes, Instrument owns/reads)
+  - Shares `results` table (both read, Instrument writes from instruments)
+  - When Instrument Service receives results, LIS Service is triggered to send them to external LIS (if auto-upload enabled)
 
 ---
 
