@@ -3,7 +3,7 @@
 from app.models.sample import Sample, SampleStatus
 from app.models.result import Result, ResultStatus, UploadStatus
 from app.models.lis_config import LISConfig, LISType, IntegrationModel, ConnectionStatus
-from app.models.order import Order, OrderStatus
+from app.models.order import Order, OrderStatus, OrderPriority
 
 __all__ = [
     "Sample",
@@ -17,4 +17,5 @@ __all__ = [
     "ConnectionStatus",
     "Order",
     "OrderStatus",
+    "OrderPriority",
 ]

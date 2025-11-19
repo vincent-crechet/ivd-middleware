@@ -473,7 +473,11 @@ Based on [PROPOSED-ARCHITECTURE.md](PROPOSED-ARCHITECTURE.md), the LIS Integrati
   - Verification Service updates `verification_status` on results
   - Event-driven (Phase 2): LIS service publishes "NewResultIngested" event → Verification service consumes
 - **With Instrument Integration Service:**
-  - Shares `orders` table (LIS owns/writes, Instrument owns/reads)
+  - Shares `Order` model from `shared/models/order.py` (canonical source of truth)
+    - LIS Integration: Creates orders from external LIS systems (owner)
+    - Instrument Integration: Assigns orders to instruments and tracks execution
+  - Order fields: `patient_id`, `test_codes` (JSON array), `priority`, `assigned_instrument_id`, `status`
+  - Shares `orders` table in database (LIS owns/writes, Instrument reads/updates assignment)
   - Shares `results` table (both read, Instrument writes from instruments)
   - When Instrument Service receives results, LIS Service is triggered to send them to external LIS (if auto-upload enabled)
 

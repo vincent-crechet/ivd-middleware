@@ -382,8 +382,12 @@ Based on [PROPOSED-ARCHITECTURE.md](PROPOSED-ARCHITECTURE.md), the Instrument In
 
 **Communication Patterns:**
 - **With LIS Service:**
-  - Reads `orders` table (LIS writes, Instrument reads)
-  - Writes `results` table (Instrument writes, Verification reads, LIS sends to external LIS)
+  - Shares `Order` model from `shared/models/order.py` (canonical source of truth)
+    - LIS Integration: Creates orders from external LIS systems (owner)
+    - Instrument Integration: Assigns orders to instruments and tracks execution
+  - Order fields: `patient_id`, `test_codes` (JSON array), `priority`, `assigned_instrument_id`, `status`
+  - Reads/updates `orders` table (LIS writes, Instrument reads and updates assignment/status)
+  - Writes `instrument_results` table (Instrument writes, Verification reads)
   - When Instrument Service receives results, LIS Service is triggered to send them to external LIS
 - **With Verification Service:**
   - Results written by Instrument Service trigger Verification Service auto-verification

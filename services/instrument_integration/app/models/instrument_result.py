@@ -1,4 +1,12 @@
-"""InstrumentResult domain model for results from instruments."""
+"""InstrumentResult domain model for results from instruments.
+
+This model represents the first stage in the result pipeline:
+    Instrument → InstrumentResult → Verification → Result → LIS
+
+InstrumentResult captures raw data from analytical instruments before
+verification. After verification, the data flows to the Result model
+in LIS Integration for upload to external LIS systems.
+"""
 
 from sqlmodel import SQLModel, Field, Index
 from typing import Optional
@@ -7,18 +15,31 @@ from enum import Enum
 
 
 class InstrumentResultStatus(str, Enum):
-    """Status of a result from instrument."""
-    RECEIVED = "received"
-    VALIDATED = "validated"
-    VERIFICATION_QUEUED = "verification_queued"
-    VERIFICATION_COMPLETED = "verification_completed"
-    VERIFICATION_FAILED = "verification_failed"
-    REJECTED = "rejected"
+    """Status of a result from instrument in the verification pipeline."""
+    RECEIVED = "received"  # Just received from instrument
+    VALIDATED = "validated"  # Passed basic validation checks
+    VERIFICATION_QUEUED = "verification_queued"  # Sent to verification service
+    VERIFICATION_COMPLETED = "verification_completed"  # Verification passed
+    VERIFICATION_FAILED = "verification_failed"  # Verification failed
+    REJECTED = "rejected"  # Result rejected (invalid data, duplicate, etc.)
 
 
 class InstrumentResult(SQLModel, table=True):
     """
     Test result received from an analytical instrument.
+
+    This is the FIRST stage in the result data flow:
+
+    1. Instrument sends result → InstrumentResult (this model)
+    2. Validation checks performed
+    3. Sent to Verification service for auto-verification rules
+    4. If verified, creates Result in LIS Integration
+    5. Result uploaded to external LIS
+
+    Key differences from Result (LIS Integration):
+    - Contains instrument-specific fields (instrument_id, instrument_flags)
+    - No LIS upload tracking (that's in Result)
+    - May be rejected before becoming a Result
 
     Results are received via REST API from instruments, validated,
     deduplicated, and queued for verification workflow.

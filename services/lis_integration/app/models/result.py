@@ -1,4 +1,12 @@
-"""Result domain model."""
+"""Result domain model for verified results ready for LIS upload.
+
+This model represents the final stage in the result pipeline:
+    Instrument → InstrumentResult → Verification → Result → LIS
+
+Result contains verified analytical outcomes that are ready to be
+uploaded to external LIS systems. It includes verification tracking
+and LIS upload status management.
+"""
 
 from sqlmodel import SQLModel, Field, Index
 from typing import Optional
@@ -8,23 +16,37 @@ from enum import Enum
 
 class ResultStatus(str, Enum):
     """Verification status of a result."""
-    PENDING = "pending"
-    VERIFIED = "verified"
-    NEEDS_REVIEW = "needs_review"
-    REJECTED = "rejected"
+    PENDING = "pending"  # Awaiting verification
+    VERIFIED = "verified"  # Passed verification, ready for LIS upload
+    NEEDS_REVIEW = "needs_review"  # Requires manual review
+    REJECTED = "rejected"  # Failed verification, will not be uploaded
 
 
 class UploadStatus(str, Enum):
     """Status of uploading result to external LIS."""
-    PENDING = "pending"
-    SENT = "sent"
-    FAILED = "failed"
-    ACKNOWLEDGED = "acknowledged"
+    PENDING = "pending"  # Awaiting upload
+    SENT = "sent"  # Uploaded to LIS
+    FAILED = "failed"  # Upload failed (will retry)
+    ACKNOWLEDGED = "acknowledged"  # LIS confirmed receipt
 
 
 class Result(SQLModel, table=True):
     """
     The analytical outcome of a test performed on a sample.
+
+    This is the FINAL stage in the result data flow:
+
+    1. InstrumentResult received from instrument (Instrument Integration)
+    2. Verification service applies auto-verification rules
+    3. Result created here after verification passes
+    4. Result uploaded to external LIS
+    5. LIS acknowledges receipt
+
+    Key differences from InstrumentResult (Instrument Integration):
+    - Contains LIS-specific fields (lis_flags, upload_status)
+    - Full upload tracking (retry count, failure reason)
+    - Verification status and method tracking
+    - Immutable after verification (VERIFIED or REJECTED)
 
     Includes measured value, reference range, verification status, and
     upload tracking for bidirectional communication with LIS.

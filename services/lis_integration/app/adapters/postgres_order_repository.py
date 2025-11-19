@@ -5,7 +5,7 @@ from typing import Optional
 import uuid
 
 from app.ports import IOrderRepository
-from app.models import Order, OrderStatus
+from app.models import Order, OrderStatus, OrderPriority
 from app.exceptions import OrderNotFoundError
 
 
@@ -98,9 +98,13 @@ class PostgresOrderRepository(IOrderRepository):
                 raise OrderNotFoundError(f"Order with id '{order.id}' not found")
 
             # Update fields
-            existing.test_code = order.test_code
-            existing.test_name = order.test_name
+            existing.patient_id = order.patient_id
+            existing.test_codes = order.test_codes
+            existing.priority = order.priority
+            existing.assigned_instrument_id = order.assigned_instrument_id
             existing.status = order.status
+            existing.assigned_at = order.assigned_at
+            existing.completed_at = order.completed_at
             existing.update_timestamp()
 
         self._session.add(existing)
