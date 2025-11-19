@@ -1,1 +1,0 @@
-requirements. 1. user is defined with username, password and attribute to define if he/she is a supervisor or not. 2. only supervisor will be able to change configuration. 3 when creating a new tenant, we should be able to define a first supervisor user which will be the person managing the configuration for this tenant.
